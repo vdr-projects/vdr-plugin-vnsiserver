@@ -570,6 +570,9 @@ bool cVNSIClient::processRequest(cRequestPacket &req)
       result = processRECORDINGS_GetEdl(req);
       break;
 
+    case VNSI_RECORDINGS_SETLASTPLAYEDPOSITION:
+      result = processRECORDINGS_SetLastPlayedPosition(req);
+      break;
 
     /** OPCODE 120 - 139: VNSI network functions for epg access and manipulating */
     case VNSI_EPG_GETFORCHANNEL:
@@ -2302,6 +2305,98 @@ bool cVNSIClient::processRECORDINGS_GetList(cRequestPacket &req) /* OPCODE 102 *
     uint32_t uid = cRecordingsCache::GetInstance().Register(recording, false);
     resp.add_U32(uid);
 
+    if (m_protocolVersion >= 14)
+    {
+      std::string posterUrl = "";
+      std::string fanartUrl = "";
+      int season = 0;
+      int episode = 0;
+      std::string firstAired = "";
+
+      // first try scraper2vdr
+      static cPlugin *pScraper = cPluginManager::GetPlugin("scraper2vdr");
+      if (!pScraper) // if it doesn't exit, try tvscraper
+        pScraper = cPluginManager::GetPlugin("tvscraper");
+
+      ScraperGetEventType call;
+      call.recording = recording;
+      int seriesId = 0;
+      int episodeId = 0;
+      int movieId = 0;
+
+      if (pScraper->Service("GetEventType", &call)) {
+        seriesId = call.seriesId;
+        episodeId = call.episodeId;
+        movieId = call.movieId;
+      }
+      
+      if (seriesId > 0) {
+        cSeries series;
+        series.seriesId = seriesId;
+        series.episodeId = episodeId;
+        if (pScraper->Service("GetSeries", &series)) {
+            firstAired = series.firstAired;
+            if (series.posters.size() > 0)
+                posterUrl = series.posters[0].path;
+            if (series.fanarts.size() > 0)
+                fanartUrl = series.fanarts[0].path;
+
+            // Episodes
+            if (series.episode.number > 0) {
+                season = series.episode.season;
+                episode = series.episode.number;
+                firstAired = series.episode.firstAired;     
+                    
+                std::string episodeImageUrl = series.episode.episodeImage.path;
+                if (!episodeImageUrl.empty())
+                    posterUrl = episodeImageUrl;
+
+            }
+        }
+      } else if (movieId > 0) {
+          cMovie movie;
+          movie.movieId = movieId;
+          if (pScraper->Service("GetMovie", &movie)) {
+            posterUrl = movie.poster.path;
+            fanartUrl = movie.fanart.path;
+            firstAired = movie.releaseDate;
+          }
+      }
+
+      // Try to use Live plugin service to return urls for images
+      // This is needed when VDR and Kodi are in different devices
+      cGetLiveImageProvider getLiveImageProvider;
+      bool serviceAvailable = getLiveImageProvider.call() != NULL;
+
+      if (serviceAvailable) {
+        if (!posterUrl.empty())
+          posterUrl = getLiveImageProvider.m_liveImageProvider->getImageUrl(posterUrl);
+        if (!fanartUrl.empty())
+          fanartUrl = getLiveImageProvider.m_liveImageProvider->getImageUrl(fanartUrl);
+      }
+
+      resp.add_String(posterUrl.c_str());
+      resp.add_String(fanartUrl.c_str());
+      resp.add_U32(season);
+      resp.add_U32(episode);
+      resp.add_String(firstAired.c_str());
+
+      cResumeFile ResumeFile(recording->FileName(), recording->IsPesRecording());
+      int resumePosition = ResumeFile.Read();
+      int fps = recording->FramesPerSecond();
+
+      // If ResumePosition exists add it to video info
+      if (resumePosition > 1)
+      {
+        int resumePositionSecs = resumePosition / fps;
+        resp.add_U32(resumePositionSecs);
+      }
+      else // Unwatched = set position 0
+      {
+        resp.add_U32(0);
+      }
+    }
+
     free(fullname);
   }
 
@@ -2475,6 +2570,49 @@ bool cVNSIClient::processRECORDINGS_GetEdl(cRequestPacket &req) /* OPCODE 105 */
   return true;
 }
 
+bool cVNSIClient::processRECORDINGS_SetLastPlayedPosition(cRequestPacket &req) /* OPCODE 106 */
+{
+  cString recName;
+  const cRecording* recording = nullptr;
+
+  uint32_t uid = req.extract_U32();
+  recording = cRecordingsCache::GetInstance().Lookup(uid);
+  int resumePosition = req.extract_U32();
+
+  DEBUGLOG("SetLastPlayedPosition called: ResumePosition from Kodi %i, Recording \"%s\"", resumePosition, recording->FileName());
+
+  cResponsePacket resp;
+  resp.init(req.getRequestID());
+
+  if (recording)
+  {
+    int fps = recording->FramesPerSecond();
+    cResumeFile ResumeFile(recording->FileName(), recording->IsPesRecording());
+
+    if (resumePosition == 0)
+    {
+      ResumeFile.Delete();
+      DEBUGLOG("SetLastPlayedPosition: ResumePosition 0, ResumeFile deleted, Recording \"%s\" ", recording->FileName());
+    }
+    else if (resumePosition > 0)
+    {
+      int resumePositionFrames = fps * resumePosition;
+      ResumeFile.Save(resumePositionFrames);
+      DEBUGLOG("SetLastPlayedPosition: ResumePosition set to %i, Recording \"%s\"", resumePosition, recording->FileName());
+    }
+    resp.add_U32(VNSI_RET_OK);
+  }
+  else
+  {
+    ERRORLOG("Error in recording name \"%s\"", (const char*)recName);
+    resp.add_U32(VNSI_RET_DATAUNKNOWN);
+  }
+
+  resp.finalise();
+  m_socket.write(resp.getPtr(), resp.getLen());
+
+  return true;
+}
 
 /** OPCODE 120 - 139: VNSI network functions for epg access and manipulating */
 
@@ -2609,6 +2747,107 @@ bool cVNSIClient::processEPG_GetForChannel(cRequestPacket &req) /* OPCODE 120 */
     resp.add_String(m_toUTF8.Convert(thisEventTitle));
     resp.add_String(m_toUTF8.Convert(thisEventSubTitle));
     resp.add_String(m_toUTF8.Convert(thisEventDescription));
+
+    if (m_protocolVersion >= 14)
+    {
+      std::string posterUrl = "";
+      int season = 0;
+      int episode = 0;
+      std::string firstAired = "";
+      int rating = 0;
+      std::string originalTitle = "";
+      std::string actors = "";
+
+      // first try scraper2vdr
+      static cPlugin *pScraper = cPluginManager::GetPlugin("scraper2vdr");
+      if (!pScraper) // if it doesn't exit, try tvscraper
+        pScraper = cPluginManager::GetPlugin("tvscraper");
+
+      ScraperGetEventType call;
+      call.event = event;
+      int seriesId = 0;
+      int episodeId = 0;
+      int movieId = 0;
+
+      if (pScraper->Service("GetEventType", &call)) {
+        seriesId = call.seriesId;
+        episodeId = call.episodeId;
+        movieId = call.movieId;
+      }
+      
+      if (seriesId > 0) {
+        cSeries series;
+        series.seriesId = seriesId;
+        series.episodeId = episodeId;
+        if (pScraper->Service("GetSeries", &series)) {
+            rating = (int)series.rating;
+            firstAired = series.firstAired;
+            if (series.posters.size() > 0)
+                posterUrl = series.posters[0].path;
+
+            // Episodes
+            if (series.episode.number > 0) {
+                season = series.episode.season;
+                episode = series.episode.number;
+                rating = (int)series.episode.rating;
+                firstAired = series.episode.firstAired;     
+                    
+                std::string episodeImageUrl = series.episode.episodeImage.path;
+                if (!episodeImageUrl.empty())
+                    posterUrl = episodeImageUrl;
+
+            }
+                
+            // Actors
+            bool firstActor = true;
+            for (unsigned int i = 0; i < series.actors.size(); i++) {
+              if (!firstActor)
+                actors += ", " + series.actors[i].name;
+              else
+                actors += series.actors[i].name;
+              firstActor = false;
+            }
+        }
+      } else if (movieId > 0) {
+          cMovie movie;
+          movie.movieId = movieId;
+          if (pScraper->Service("GetMovie", &movie)) {
+            posterUrl = movie.poster.path;
+            firstAired = movie.releaseDate;
+            rating = (int)movie.voteAverage;
+            originalTitle = movie.originalTitle;
+            
+            // Actors
+            bool firstActor = true;
+            for (unsigned int i = 0; i < movie.actors.size(); i++) {
+              if (!firstActor)
+                actors += ", " + movie.actors[i].name;
+              else
+                actors += movie.actors[i].name;
+              firstActor = false;
+            }
+          }
+      }
+
+      // Try to use Live plugin service to return urls for images
+      // This is needed when VDR and Kodi are in different devices
+      cGetLiveImageProvider getLiveImageProvider;
+      bool serviceAvailable = getLiveImageProvider.call() != NULL;
+
+      if (serviceAvailable) {
+        if (!posterUrl.empty())
+          posterUrl = getLiveImageProvider.m_liveImageProvider->getImageUrl(posterUrl);
+      }
+
+      resp.add_String(posterUrl.c_str());
+      resp.add_U32(season);
+      resp.add_U32(episode);
+      resp.add_String(firstAired.c_str());
+      resp.add_U32(rating);
+      resp.add_String(originalTitle.c_str());
+      resp.add_String(actors.c_str());
+
+    }
 
     atLeastOneEvent = true;
   }
