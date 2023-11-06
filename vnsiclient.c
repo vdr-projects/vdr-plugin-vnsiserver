@@ -2330,7 +2330,7 @@ bool cVNSIClient::processRECORDINGS_GetList(cRequestPacket &req) /* OPCODE 102 *
         movieId = call.movieId;
       }
       
-      if (seriesId > 0) {
+      if (call.type == tSeries) {
         cSeries series;
         series.seriesId = seriesId;
         series.episodeId = episodeId;
@@ -2353,7 +2353,7 @@ bool cVNSIClient::processRECORDINGS_GetList(cRequestPacket &req) /* OPCODE 102 *
 
             }
         }
-      } else if (movieId > 0) {
+      } else if (call.type == tMovie) {
           cMovie movie;
           movie.movieId = movieId;
           if (pScraper->Service("GetMovie", &movie)) {
@@ -2775,7 +2775,7 @@ bool cVNSIClient::processEPG_GetForChannel(cRequestPacket &req) /* OPCODE 120 */
         movieId = call.movieId;
       }
       
-      if (seriesId > 0) {
+      if (call.type == tSeries) {
         cSeries series;
         series.seriesId = seriesId;
         series.episodeId = episodeId;
@@ -2808,7 +2808,7 @@ bool cVNSIClient::processEPG_GetForChannel(cRequestPacket &req) /* OPCODE 120 */
               firstActor = false;
             }
         }
-      } else if (movieId > 0) {
+      } else if (call.type == tMovie) {
           cMovie movie;
           movie.movieId = movieId;
           if (pScraper->Service("GetMovie", &movie)) {
