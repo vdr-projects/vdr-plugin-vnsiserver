@@ -257,16 +257,21 @@ void cResponsePacket::add_double(double d)
 
 void cResponsePacket::checkExtend(uint32_t by)
 {
-  if ((80 + bufUsed + by) < bufSize)
+  // Check if extending of buffer is actually needed.
+  // NOTE: We currently also extend an exactly fitting buffer.
+  if ((bufUsed + by) < bufSize)
   {
-	  return;
+    return;
   }
 
-  uint8_t* newBuf = (uint8_t*)realloc(buffer, bufSize + 512 + by);
+  // Extend by at least 512 bytes to reduce performance impact of realloc.
+  if (by < 512) by = 512;
+
+  uint8_t* newBuf = (uint8_t*)realloc(buffer, bufSize + by);
   if (!newBuf)
   {
-	  throw std::bad_alloc();
+    throw std::bad_alloc();
   }
   buffer = newBuf;
-  bufSize += 512 + by;
+  bufSize += by;
 }
