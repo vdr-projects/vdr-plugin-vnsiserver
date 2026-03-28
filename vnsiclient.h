@@ -43,6 +43,9 @@
 #include <condition_variable>
 #include <memory>
 
+#include "services_tvscraper.h"
+#include "services_live.h"
+
 #define VNSI_EPG_AGAIN 1
 #define VNSI_EPG_PAUSE 2
 
@@ -195,6 +198,7 @@ private:
   bool processRECORDINGS_Delete(cRequestPacket &r);
   bool processRECORDINGS_Move(cRequestPacket &r);
   bool processRECORDINGS_GetEdl(cRequestPacket &r);
+  bool processRECORDINGS_SetLastPlayedPosition(cRequestPacket &r);
   bool processRECORDINGS_DELETED_Supported(cRequestPacket &r);
   bool processRECORDINGS_DELETED_GetCount(cRequestPacket &r);
   bool processRECORDINGS_DELETED_GetList(cRequestPacket &r);
